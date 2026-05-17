@@ -87,12 +87,53 @@ matchForm.addEventListener('submit', async (e) => {
     }
 });
 
+function generateGameSummary() {
+    const batTeam = $('batting-team').value;
+    const bowlTeam = $('bowling-team').value;
+    const runs = +$('runs').value || 0;
+    const wkts = +$('wickets').value || 0;
+    const over = +$('over').value || 0;
+    const ball = +$('ball').value || 0;
+    const target = +$('target').value || 0;
+    const venue = $('venue').value;
+    const pitch = $('pitch').value;
+    const dew = $('dew').value;
+    const striker = $('striker').value;
+    const nonStriker = $('non-striker').value;
+    
+    let h = `🏏 **HIGH-STAKES CLASH AT THE ${venue.toUpperCase()}!**<br><br>`;
+    h += `We are live in the **${$('phase').value.toUpperCase()} PHASE** of this thrilling encounter. `;
+    h += `**${batTeam}** is currently at **${runs}/${wkts}** after **${over}.${ball} overs** `;
+    
+    if ($('innings').value === '2' && target > 0) {
+        const need = target - runs;
+        const ballsLeft = (20 - over) * 6 - ball;
+        const rrr = ballsLeft > 0 ? ((need / ballsLeft) * 6).toFixed(2) : '∞';
+        h += `chasing a formidable target of **${target}** set by **${bowlTeam}**.<br><br>`;
+        h += `The equation is clear: **${need} runs required from ${ballsLeft} deliveries** at a Required Run Rate of **${rrr}**. `;
+    } else {
+        h += `batting first against a disciplined **${bowlTeam}** bowling attack.<br><br>`;
+    }
+    
+    h += `With the dangerous **${striker}** on strike and the legendary **${nonStriker}** anchoring at the other end, `;
+    h += `the atmosphere is electric. The **${pitch} pitch** conditions are playing a crucial role, and the **${dew} dew factor** is sliding the ball rapidly, making it a captain's ultimate tactical chess match. `;
+    h += `The next dynamic decision will define the course of the game!`;
+    
+    return h;
+}
+
 function showDashboard() {
     inputPanel.style.display = 'none';
     dashboard.style.display = 'block';
     debateContent.innerHTML = '<div class="debate-placeholder"><p>⏳ Agents assembling...</p></div>';
+    
+    // Generate and display Game Summary
+    const summaryHTML = generateGameSummary();
+    $('game-summary-panel').style.display = 'block';
+    typeHTML($('game-summary-text'), summaryHTML, 5);
+
     // Reset panels
-    ['captain-call-panel','confidence-panel','commentary-panel','extras-panel'].forEach(id => $(id).style.display = 'none');
+    ['captain-call-panel','confidence-panel','commentary-panel','extras-panel','export-panel'].forEach(id => $(id).style.display = 'none');
     $('stats-report-text').textContent = 'Waiting...';
     $('conditions-report-text').textContent = 'Waiting...';
     $('comm-for').innerHTML = '';
