@@ -1,0 +1,45 @@
+# =====================================================================
+# Captain Cool — GCP Cloud Build Orchestration Configuration
+# Deploys server to Cloud Run on commits or manual trigger
+# =====================================================================
+
+steps:
+  # Step 1: Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - '$_AR_REGISTRY/$_SERVICE_NAME:$COMMIT_SHA'
+      - '.'
+
+  # Step 2: Push the Docker image to GCP Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '$_AR_REGISTRY/$_SERVICE_NAME:$COMMIT_SHA'
+
+  # Step 3: Deploy to Google Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '$_SERVICE_NAME'
+      - '--image=$_AR_REGISTRY/$_SERVICE_NAME:$COMMIT_SHA'
+      - '--region=$_GCP_REGION'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--port=8080'
+      - '--set-env-vars=GOOGLE_API_KEY=$_GOOGLE_API_KEY'
+
+images:
+  - '$_AR_REGISTRY/$_SERVICE_NAME:$COMMIT_SHA'
+
+substitutions:
+  _SERVICE_NAME: 'captain-cool-strategist'
+  _GCP_REGION: 'us-central1'
+  _AR_REGISTRY: 'us-central1-docker.pkg.dev/$PROJECT_ID/captain-cool-repo'
+  _GOOGLE_API_KEY: 'REPLACE_WITH_API_KEY_OR_USE_SECRET_MANAGER'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

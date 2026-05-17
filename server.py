@@ -30,7 +30,10 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
-client = genai.Client()
+api_key = os.getenv("GOOGLE_API_KEY")
+if not api_key:
+    print("[Warning] GOOGLE_API_KEY is missing. Application will default to simulation fallback.")
+client = genai.Client(api_key=api_key) if api_key else None
 MODEL_PRO = "gemini-2.5-flash"
 MODEL_FLASH = "gemini-2.5-flash"
 
@@ -130,8 +133,8 @@ Keep it under 300 words. Thoughtful, nuanced cricket analysis."""
 def call_gemini(model, system_prompt, user_message, tools=None):
     """Synchronous Gemini API call with high-fidelity mock fallback on error."""
     global API_QUOTA_EXHAUSTED
-    if API_QUOTA_EXHAUSTED:
-        raise Exception("API Quota previously exhausted. Skipping to fallback.")
+    if API_QUOTA_EXHAUSTED or client is None:
+        raise Exception("API Quota previously exhausted or client missing. Skipping to fallback.")
     try:
         config = types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.8)
         if tools:
@@ -369,5 +372,6 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    print("\n[Captain Cool] Starting server on http://localhost:8000\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8022))
+    print(f"\n[Captain Cool] Starting server on http://localhost:{port}\n")
+    uvicorn.run(app, host="0.0.0.0", port=port)

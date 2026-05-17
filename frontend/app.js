@@ -246,17 +246,94 @@ function parseReflection(text) {
     $('flashback-text').innerHTML = flashMatch ? fmt(flashMatch[1].trim()) : '<span style="color:var(--text-muted)">See reflection report</span>';
 }
 
+// ── Typewriter Streaming Effect ─────────────────────────────
+function typeHTML(el, html, speed = 6) {
+    el.innerHTML = '';
+    let i = 0;
+    let isTag = false;
+    let text = '';
+    
+    function type() {
+        if (i < html.length) {
+            let char = html[i];
+            if (char === '<') isTag = true;
+            text += char;
+            if (char === '>') isTag = false;
+            i++;
+            if (isTag) {
+                type();
+            } else {
+                el.innerHTML = text;
+                setTimeout(type, speed);
+            }
+        }
+    }
+    type();
+}
+
+// ── Export Report Feature ────────────────────────────────────
+function downloadReport() {
+    let md = `# 🏏 CAPTAIN COOL — MULTI-AGENT IPL STRATEGY REPORT\n\n`;
+    md += `*Generated on ${new Date().toLocaleString()}*\n\n`;
+    md += `## 📋 MATCH SITUATION\n`;
+    md += `- **Teams**: ${$('batting-team').value} vs ${$('bowling-team').value}\n`;
+    md += `- **Score**: ${$('runs').value}/${$('wickets').value} after ${$('over').value}.${$('ball').value} overs\n`;
+    if ($('innings').value === '2') {
+        md += `- **Target**: ${$('target').value} (Need ${$('sc-need').textContent} from ${$('sc-balls').textContent} balls, RRR: ${$('sc-rrr').textContent})\n`;
+    }
+    md += `- **Venue**: ${$('venue').value} (Pitch: ${$('pitch').value}, Dew: ${$('dew').value})\n`;
+    md += `- **Batsmen**: Striker: ${$('striker').value}, Non-Striker: ${$('non-striker').value}\n\n`;
+    
+    md += `## 📊 FIELD INTEL\n`;
+    md += `### Stats Analyst Intelligence\n${$('stats-report-text').innerText}\n\n`;
+    md += `### Conditions Agent Assessment\n${$('conditions-report-text').innerText}\n\n`;
+    
+    md += `## ⚔️ AGENT DEBATE TRANSCRIPT\n`;
+    const msgs = debateContent.querySelectorAll('.debate-msg');
+    msgs.forEach(m => {
+        const agent = m.querySelector('.msg-agent').innerText;
+        const body = m.querySelector('.msg-text').innerText;
+        md += `### ${agent}\n${body}\n\n`;
+    });
+    
+    md += `## 🎯 STRATEGY DECISION & REFLECTION\n`;
+    md += `**Confidence Score**: ${$('confidence-score').textContent}\n\n`;
+    md += `### Road Not Taken (Counterfactual)\n${$('counterfactual-text').innerText}\n\n`;
+    md += `### Historical Parallel (IPL Flashback)\n${$('flashback-text').innerText}\n\n`;
+    
+    md += `## 🎙️ MULTI-PERSPECTIVE COMMENTARY\n`;
+    md += `### 👍 Ravi Shastri (For perspective)\n${$('comm-for').innerText}\n\n`;
+    md += `### 👎 Sanjay Manjrekar (Against perspective)\n${$('comm-against').innerText}\n\n`;
+    md += `### ⚖️ Harsha Bhogle (Balanced Neutral perspective)\n${$('comm-neutral').innerText}\n\n`;
+    
+    md += `\n---\n*Powered by Google Gemini 2.5 Pro + Flash, Google ADK & Antigravity.*`;
+    
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Captain_Cool_Strategy_Report_${$('batting-team').value}_vs_${$('bowling-team').value}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
 // ── Parse Commentary → Multi-perspective ─────────────────────
 function parseCommentary(text) {
     $('captain-call-panel').style.display = 'block';
     
     // Extract Captain's Call section
     const callMatch = text.match(/(?:THE CAPTAIN'S CALL|Captain's Call)[:\s*]*\n?([\s\S]*?)(?=📊|WHY|$)/i);
-    $('captain-call-body').innerHTML = callMatch ? fmt(callMatch[1].trim()) : fmt(text.substring(0, 200));
+    const callHTML = callMatch ? fmt(callMatch[1].trim()) : fmt(text.substring(0, 200));
+    typeHTML($('captain-call-body'), callHTML, 6);
 
     // The full commentary goes to "For" tab (supporting the decision)
     $('commentary-panel').style.display = 'block';
-    $('comm-for').innerHTML = fmt(text);
+    typeHTML($('comm-for'), fmt(text), 6);
+    
+    // Show the export report panel since generation is fully landing
+    $('export-panel').style.display = 'block';
     
     // The against/neutral will be populated by separate agent calls from server
     if (!$('comm-against').innerHTML) {
@@ -322,3 +399,6 @@ $('innings').addEventListener('change', e => {
 
 // Health check
 fetch(`${API}/api/health`).then(r => r.ok && ($('status-badge').textContent = '● Online', $('status-badge').classList.add('online'))).catch(() => {});
+
+// Export Strategy button listener
+$('export-btn').addEventListener('click', downloadReport);
