@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Captain Cool 🏏 — IPL Match Strategist</title>
+    <meta name="description" content="Multi-Agent IPL Match Strategist powered by Google Gemini. Think like Dhoni, score like Kohli.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Outfit:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="static/styles.css">
+</head>
+<body>
+    <!-- Animated background -->
+    <div class="bg-animation">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+        <div class="orb orb-4"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header" id="app-header">
+            <div class="logo-section">
+                <div class="logo-icon">🏏</div>
+                <div>
+                    <h1 class="logo-title">Captain Cool</h1>
+                    <p class="logo-subtitle">Multi-Agent IPL Match Strategist · Powered by Google Gemini</p>
+                </div>
+            </div>
+            <div class="header-badges">
+                <span class="badge badge-gemini">⚡ Gemini 2.5</span>
+                <span class="badge badge-adk">🔧 Google ADK</span>
+                <span class="badge badge-agents">🤖 6 Agents</span>
+                <span class="badge badge-live" id="status-badge">● Offline</span>
+            </div>
+        </header>
+
+        <!-- ═══════════════════ INPUT PANEL ═══════════════════ -->
+        <section class="panel input-panel glass-panel" id="input-panel">
+            <div class="panel-header">
+                <h2>📋 Match State</h2>
+                <p class="panel-desc">Enter the current match situation and let 6 AI agents debate the best strategy</p>
+            </div>
+
+            <form id="match-form" class="match-form">
+                <!-- Live Scorecard Preview -->
+                <div class="scorecard-preview" id="scorecard-preview">
+                    <div class="sc-team-row">
+                        <span class="sc-team" id="sc-bat-team">CSK</span>
+                        <span class="sc-score" id="sc-score">127/4</span>
+                        <span class="sc-overs" id="sc-overs">(14.3 ov)</span>
+                    </div>
+                    <div class="sc-target-row" id="sc-target-row">
+                        <span>Need <strong id="sc-need">59</strong> from <strong id="sc-balls">33</strong> balls</span>
+                        <span class="sc-rrr">RRR: <strong id="sc-rrr">10.73</strong></span>
+                    </div>
+                    <div class="sc-batters">
+                        <span class="sc-batter"><span class="sc-strike">*</span> <span id="sc-striker-name">R Jadeja</span></span>
+                        <span class="sc-batter"><span id="sc-nonstriker-name">MS Dhoni</span></span>
+                    </div>
+                </div>
+
+                <!-- Row 1: Core -->
+                <div class="form-row form-row-3">
+                    <div class="form-group">
+                        <label for="innings">Innings</label>
+                        <select id="innings" required>
+                            <option value="1">1st Innings</option>
+                            <option value="2" selected>2nd Innings</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="over">Over</label>
+                        <input type="number" id="over" min="0" max="20" value="14" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="ball">Ball</label>
+                        <input type="number" id="ball" min="0" max="5" value="3" required>
+                    </div>
+                </div>
+
+                <!-- Row 2: Score -->
+                <div class="form-row form-row-3">
+                    <div class="form-group">
+                        <label for="runs">Runs</label>
+                        <input type="number" id="runs" min="0" max="350" value="127" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="wickets">Wickets</label>
+                        <input type="number" id="wickets" min="0" max="10" value="4" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="target">Target</label>
+                        <input type="number" id="target" min="0" max="350" value="186">
+                    </div>
+                </div>
+
+                <!-- Row 3: Teams -->
+                <div class="form-row form-row-2">
+                    <div class="form-group">
+                        <label for="batting-team">Batting</label>
+                        <select id="batting-team" required>
+                            <option value="CSK" selected>CSK</option>
+                            <option value="MI">MI</option><option value="RCB">RCB</option>
+                            <option value="KKR">KKR</option><option value="SRH">SRH</option>
+                            <option value="DC">DC</option><option value="PBKS">PBKS</option>
+                            <option value="RR">RR</option><option value="GT">GT</option>
+                            <option value="LSG">LSG</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="bowling-team">Bowling</label>
+                        <select id="bowling-team" required>
+                            <option value="MI" selected>MI</option><option value="CSK">CSK</option>
+                            <option value="RCB">RCB</option><option value="KKR">KKR</option>
+                            <option value="SRH">SRH</option><option value="DC">DC</option>
+                            <option value="PBKS">PBKS</option><option value="RR">RR</option>
+                            <option value="GT">GT</option><option value="LSG">LSG</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Row 4: Batters -->
+                <div class="form-row form-row-2">
+                    <div class="form-group">
+                        <label for="striker">Striker</label>
+                        <input type="text" id="striker" value="Ravindra Jadeja" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="non-striker">Non-Striker</label>
+                        <input type="text" id="non-striker" value="MS Dhoni" required>
+                    </div>
+                </div>
+
+                <!-- Row 5: Venue & Conditions -->
+                <div class="form-row form-row-3">
+                    <div class="form-group">
+                        <label for="venue">Venue</label>
+                        <select id="venue" required>
+                            <option value="Wankhede" selected>Wankhede, Mumbai</option>
+                            <option value="Chepauk">Chepauk, Chennai</option>
+                            <option value="Chinnaswamy">Chinnaswamy, Bengaluru</option>
+                            <option value="Eden Gardens">Eden Gardens, Kolkata</option>
+                            <option value="Narendra Modi">Narendra Modi, Ahmedabad</option>
+                            <option value="Arun Jaitley">Arun Jaitley, Delhi</option>
+                            <option value="Rajiv Gandhi">Rajiv Gandhi, Hyderabad</option>
+                            <option value="Sawai Mansingh">Sawai Mansingh, Jaipur</option>
+                            <option value="Ekana">Ekana, Lucknow</option>
+                            <option value="Dharamsala">HPCA, Dharamsala</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="pitch">Pitch</label>
+                        <select id="pitch">
+                            <option value="flat">Flat</option>
+                            <option value="turning" selected>Turning</option>
+                            <option value="seaming">Seaming</option>
+                            <option value="two-paced">Two-Paced</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="dew">Dew</label>
+                        <select id="dew">
+                            <option value="none">None</option>
+                            <option value="light">Light</option>
+                            <option value="heavy" selected>Heavy</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Row 6: Bowlers -->
+                <div class="form-group full-width">
+                    <label for="bowlers">Bowlers (name:overs)</label>
+                    <input type="text" id="bowlers" value="Jasprit Bumrah:3, Trent Boult:4, Hardik Pandya:2, Piyush Chawla:3">
+                </div>
+
+                <!-- Row 7: Extras -->
+                <div class="form-row form-row-2">
+                    <div class="form-group">
+                        <label for="impact-player">Impact Player</label>
+                        <select id="impact-player">
+                            <option value="yes" selected>Available</option>
+                            <option value="no">Not Available</option>
+                            <option value="used">Already Used</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="phase">Phase</label>
+                        <select id="phase">
+                            <option value="powerplay">Powerplay (1-6)</option>
+                            <option value="middle" selected>Middle (7-15)</option>
+                            <option value="death">Death (16-20)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <button type="submit" class="submit-btn" id="submit-btn">
+                    <span class="btn-text">🧠 Ask Captain Cool</span>
+                    <span class="btn-loading" style="display:none"><span class="spinner"></span> Agents Debating...</span>
+                </button>
+            </form>
+        </section>
+
+        <!-- ═══════════════════ DASHBOARD PANEL ═══════════════════ -->
+        <section class="dashboard" id="dashboard" style="display:none">
+            <!-- Top bar with back + scorecard -->
+            <div class="dash-topbar">
+                <button class="back-btn" id="back-btn">← New Query</button>
+                <div class="dash-scorecard" id="dash-scorecard">
+                    <span class="ds-team" id="ds-team">CSK</span>
+                    <span class="ds-score" id="ds-score">127/4</span>
+                    <span class="ds-overs" id="ds-overs">(14.3)</span>
+                    <span class="ds-vs">vs</span>
+                    <span class="ds-team" id="ds-bowl-team">MI</span>
+                    <span class="ds-target" id="ds-target">Target: 186</span>
+                </div>
+            </div>
+
+            <!-- Agent Pipeline -->
+            <div class="pipeline glass-panel" id="pipeline">
+                <div class="pipeline-step" id="step-stats">
+                    <div class="step-dot"></div>
+                    <div class="step-icon">📊</div>
+                    <div class="step-info">
+                        <div class="step-label">Stats Analyst</div>
+                        <div class="step-status">waiting</div>
+                    </div>
+                </div>
+                <div class="pipeline-connector"></div>
+                <div class="pipeline-step" id="step-conditions">
+                    <div class="step-dot"></div>
+                    <div class="step-icon">🌦️</div>
+                    <div class="step-info">
+                        <div class="step-label">Conditions</div>
+                        <div class="step-status">waiting</div>
+                    </div>
+                </div>
+                <div class="pipeline-connector"></div>
+                <div class="pipeline-step" id="step-debate">
+                    <div class="step-dot"></div>
+                    <div class="step-icon">⚔️</div>
+                    <div class="step-info">
+                        <div class="step-label">Debate</div>
+                        <div class="step-status">waiting</div>
+                        <div class="step-round" id="debate-round-indicator"></div>
+                    </div>
+                </div>
+                <div class="pipeline-connector"></div>
+                <div class="pipeline-step" id="step-reflection">
+                    <div class="step-dot"></div>
+                    <div class="step-icon">🪞</div>
+                    <div class="step-info">
+                        <div class="step-label">Reflection</div>
+                        <div class="step-status">waiting</div>
+                    </div>
+                </div>
+                <div class="pipeline-connector"></div>
+                <div class="pipeline-step" id="step-commentary">
+                    <div class="step-dot"></div>
+                    <div class="step-icon">🎙️</div>
+                    <div class="step-info">
+                        <div class="step-label">Commentary</div>
+                        <div class="step-status">waiting</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Dashboard Grid -->
+            <div class="dash-grid">
+                <!-- Left column: Debate Transcript -->
+                <div class="dash-col dash-col-left">
+                    <div class="glass-panel debate-panel">
+                        <h3 class="section-title" id="debate-toggle">
+                            ⚔️ Agent Debate Transcript
+                            <span class="toggle-icon">▼</span>
+                        </h3>
+                        <div class="debate-content" id="debate-content">
+                            <div class="debate-placeholder">
+                                <p>Agents are assembling in the strategy room...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Intelligence Reports (collapsible) -->
+                    <div class="glass-panel intel-panel">
+                        <h3 class="section-title" id="intel-toggle">
+                            📊 Intelligence Reports
+                            <span class="toggle-icon">▶</span>
+                        </h3>
+                        <div class="intel-content" id="intel-content" style="display:none">
+                            <div class="intel-card" id="stats-report-card">
+                                <h4>📊 Stats Analyst</h4>
+                                <div class="intel-text" id="stats-report-text">Waiting...</div>
+                            </div>
+                            <div class="intel-card" id="conditions-report-card">
+                                <h4>🌦️ Conditions Agent</h4>
+                                <div class="intel-text" id="conditions-report-text">Waiting...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right column: Final Output + Commentary -->
+                <div class="dash-col dash-col-right">
+                    <!-- Captain's Call Card -->
+                    <div class="glass-panel captain-call-panel" id="captain-call-panel" style="display:none">
+                        <div class="captain-call-header">
+                            <span class="cc-icon">🏏</span>
+                            <h3>The Captain's Call</h3>
+                        </div>
+                        <div class="captain-call-body" id="captain-call-body"></div>
+                    </div>
+
+                    <!-- Confidence Meter -->
+                    <div class="glass-panel confidence-panel" id="confidence-panel" style="display:none">
+                        <h3>🎯 Confidence Meter</h3>
+                        <div class="confidence-display">
+                            <div class="confidence-score" id="confidence-score">—</div>
+                            <div class="confidence-bar-wrap">
+                                <div class="confidence-bar" id="confidence-bar"></div>
+                            </div>
+                            <div class="confidence-label" id="confidence-label"></div>
+                        </div>
+                    </div>
+
+                    <!-- Multi-Perspective Commentary -->
+                    <div class="glass-panel commentary-panel" id="commentary-panel" style="display:none">
+                        <h3>🎙️ Commentary Box</h3>
+                        <div class="commentary-tabs" id="commentary-tabs">
+                            <button class="comm-tab active" data-tab="for">👍 For</button>
+                            <button class="comm-tab" data-tab="against">👎 Against</button>
+                            <button class="comm-tab" data-tab="neutral">⚖️ Neutral</button>
+                        </div>
+                        <div class="commentary-body">
+                            <div class="comm-content active" id="comm-for"></div>
+                            <div class="comm-content" id="comm-against"></div>
+                            <div class="comm-content" id="comm-neutral"></div>
+                        </div>
+                    </div>
+
+                    <!-- Counterfactual + IPL Flashback -->
+                    <div class="glass-panel extras-panel" id="extras-panel" style="display:none">
+                        <div class="extras-grid">
+                            <div class="extra-card" id="counterfactual-card">
+                                <h4>🔄 Road Not Taken</h4>
+                                <div class="extra-text" id="counterfactual-text"></div>
+                            </div>
+                            <div class="extra-card" id="flashback-card">
+                                <h4>📜 IPL Flashback</h4>
+                                <div class="extra-text" id="flashback-text"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <footer class="footer">
+                <p>Built with 💛 using Google Gemini 2.5 Pro + Flash · Google ADK · Vibe-coded with Google Antigravity</p>
+            </footer>
+        </section>
+    </div>
+
+    <script src="static/app.js"></script>
+</body>
+</html>
