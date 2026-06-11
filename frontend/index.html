@@ -32,6 +32,7 @@
                 <span class="badge badge-gemini">⚡ Gemini 2.5</span>
                 <span class="badge badge-adk">🔧 Google ADK</span>
                 <span class="badge badge-agents">🤖 6 Agents</span>
+                <span class="badge badge-stream">⚡ Live Stream</span>
                 <span class="badge badge-live" id="status-badge">● Offline</span>
             </div>
         </header>
@@ -40,7 +41,7 @@
         <section class="panel input-panel glass-panel" id="input-panel">
             <div class="panel-header">
                 <h2>📋 Match State</h2>
-                <p class="panel-desc">Enter the current match situation and let 6 AI agents debate the best strategy</p>
+                <p class="panel-desc">Enter the current match situation and let 6 AI agents debate the best strategy in real-time</p>
             </div>
 
             <form id="match-form" class="match-form">
@@ -217,6 +218,14 @@
                 </div>
             </div>
 
+            <!-- Live Commentary Ticker -->
+            <div class="ticker-wrap" id="ticker-wrap" style="display:none">
+                <div class="ticker-label">🔴 LIVE</div>
+                <div class="ticker-content">
+                    <div class="ticker-text" id="ticker-text">Agents are assembling in the strategy room...</div>
+                </div>
+            </div>
+
             <!-- Agent Pipeline -->
             <div class="pipeline glass-panel" id="pipeline">
                 <div class="pipeline-step" id="step-stats">
@@ -312,13 +321,49 @@
 
                 <!-- Right column: Final Output + Commentary -->
                 <div class="dash-col dash-col-right">
+
+                    <!-- Win Probability Arc -->
+                    <div class="glass-panel win-prob-panel" id="win-prob-panel" style="display:none">
+                        <h3>📈 Live Win Probability</h3>
+                        <div class="win-prob-display">
+                            <div class="win-prob-arc-wrap">
+                                <svg class="win-prob-svg" viewBox="0 0 120 80" id="win-prob-svg">
+                                    <!-- Background arc -->
+                                    <path d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="10" stroke-linecap="round"/>
+                                    <!-- Active arc (animated) -->
+                                    <path id="win-arc-before" d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="rgba(245,158,11,0.3)" stroke-width="10" stroke-linecap="round" stroke-dasharray="157" stroke-dashoffset="157"/>
+                                    <path id="win-arc-after" d="M 10 70 A 50 50 0 0 1 110 70" fill="none" stroke="#3fb950" stroke-width="10" stroke-linecap="round" stroke-dasharray="157" stroke-dashoffset="157"/>
+                                    <!-- Center text -->
+                                    <text x="60" y="62" text-anchor="middle" fill="#f59e0b" font-size="16" font-weight="800" font-family="Teko, sans-serif" id="win-arc-pct">—</text>
+                                    <text x="60" y="74" text-anchor="middle" fill="#8b949e" font-size="6" font-family="Inter, sans-serif">WIN PROB</text>
+                                </svg>
+                            </div>
+                            <div class="win-prob-details">
+                                <div class="win-prob-row">
+                                    <span class="wp-label">Before</span>
+                                    <span class="wp-val wp-before" id="wp-before">—</span>
+                                </div>
+                                <div class="win-prob-row">
+                                    <span class="wp-label">After</span>
+                                    <span class="wp-val wp-after" id="wp-after">—</span>
+                                </div>
+                                <div class="win-prob-row">
+                                    <span class="wp-label">Round</span>
+                                    <span class="wp-val wp-round" id="wp-round">—</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Captain's Call Card -->
                     <div class="glass-panel captain-call-panel" id="captain-call-panel" style="display:none">
                         <div class="captain-call-header">
                             <span class="cc-icon">🏏</span>
                             <h3>The Captain's Call</h3>
                         </div>
-                        <div class="captain-call-body" id="captain-call-body"></div>
+                        <div class="captain-call-body" id="captain-call-body">
+                            <span class="streaming-cursor" id="strategist-cursor"></span>
+                        </div>
                     </div>
 
                     <!-- Confidence Meter -->
@@ -335,7 +380,7 @@
 
                     <!-- Multi-Perspective Commentary -->
                     <div class="glass-panel commentary-panel" id="commentary-panel" style="display:none">
-                        <h3>🎙️ Commentary Box</h3>
+                        <h3>🎙️ Commentary Box <span class="live-badge" id="comm-live-badge" style="display:none">🔴 LIVE</span></h3>
                         <div class="commentary-tabs" id="commentary-tabs">
                             <button class="comm-tab active" data-tab="for">👍 For</button>
                             <button class="comm-tab" data-tab="against">👎 Against</button>

@@ -1,6 +1,7 @@
 /**
- * Captain Cool — Full Dashboard Frontend
- * SSE streaming, live scorecard, debate transcript, multi-perspective commentary
+ * Captain Cool — Real-Time Streaming Dashboard Frontend
+ * SSE streaming with chunk-by-chunk live rendering, win probability arc,
+ * live commentary ticker, and animated debate messages.
  */
 const API = window.location.origin;
 
@@ -15,6 +16,11 @@ const debateContent = $('debate-content');
 const debateToggle = $('debate-toggle');
 const intelToggle = $('intel-toggle');
 const intelContent = $('intel-content');
+const tickerText = $('ticker-text');
+const tickerWrap = $('ticker-wrap');
+
+// ── Active SSE connection controller ────────────────────────
+let currentAbortController = null;
 
 const steps = {
     stats: $('step-stats'),
@@ -26,6 +32,11 @@ const steps = {
 
 // Scorecard update fields
 const scFields = ['innings','over','ball','runs','wickets','target','batting-team','bowling-team','striker','non-striker'];
+
+// Per-agent streaming buffers
+const streamBuffers = {};
+// Track active streaming debate messages
+const activeDebateMsgs = {};
 
 // ── Live Scorecard Preview ───────────────────────────────────
 function updateScorecardPreview() {
@@ -101,28 +112,34 @@ function generateGameSummary() {
     const striker = $('striker').value;
     const nonStriker = $('non-striker').value;
     
-    let h = `🏏 **HIGH-STAKES CLASH AT THE ${venue.toUpperCase()}!**<br><br>`;
-    h += `We are live in the **${$('phase').value.toUpperCase()} PHASE** of this thrilling encounter. `;
-    h += `**${batTeam}** is currently at **${runs}/${wkts}** after **${over}.${ball} overs** `;
+    let h = `🏏 <strong>HIGH-STAKES CLASH AT THE ${venue.toUpperCase()}!</strong><br><br>`;
+    h += `We are live in the <strong>${$('phase').value.toUpperCase()} PHASE</strong> of this thrilling encounter. `;
+    h += `<strong>${batTeam}</strong> is currently at <strong>${runs}/${wkts}</strong> after <strong>${over}.${ball} overs</strong> `;
     
     if ($('innings').value === '2' && target > 0) {
         const need = target - runs;
         const ballsLeft = (20 - over) * 6 - ball;
         const rrr = ballsLeft > 0 ? ((need / ballsLeft) * 6).toFixed(2) : '∞';
-        h += `chasing a formidable target of **${target}** set by **${bowlTeam}**.<br><br>`;
-        h += `The equation is clear: **${need} runs required from ${ballsLeft} deliveries** at a Required Run Rate of **${rrr}**. `;
+        h += `chasing a formidable target of <strong>${target}</strong> set by <strong>${bowlTeam}</strong>.<br><br>`;
+        h += `The equation is clear: <strong>${need} runs required from ${ballsLeft} deliveries</strong> at a Required Run Rate of <strong>${rrr}</strong>. `;
     } else {
-        h += `batting first against a disciplined **${bowlTeam}** bowling attack.<br><br>`;
+        h += `batting first against a disciplined <strong>${bowlTeam}</strong> bowling attack.<br><br>`;
     }
     
-    h += `With the dangerous **${striker}** on strike and the legendary **${nonStriker}** anchoring at the other end, `;
-    h += `the atmosphere is electric. The **${pitch} pitch** conditions are playing a crucial role, and the **${dew} dew factor** is sliding the ball rapidly, making it a captain's ultimate tactical chess match. `;
+    h += `With the dangerous <strong>${striker}</strong> on strike and the legendary <strong>${nonStriker}</strong> anchoring at the other end, `;
+    h += `the atmosphere is electric. The <strong>${pitch} pitch</strong> conditions are playing a crucial role, and the <strong>${dew} dew factor</strong> is sliding the ball rapidly, making it a captain's ultimate tactical chess match. `;
     h += `The next dynamic decision will define the course of the game!`;
     
     return h;
 }
 
 function showDashboard() {
+    // ── Abort any in-flight SSE connection from a previous query ──
+    if (currentAbortController) {
+        currentAbortController.abort();
+        currentAbortController = null;
+    }
+
     inputPanel.style.display = 'none';
     dashboard.style.display = 'block';
     debateContent.innerHTML = '<div class="debate-placeholder"><p>⏳ Agents assembling...</p></div>';
@@ -130,18 +147,36 @@ function showDashboard() {
     // Generate and display Game Summary
     const summaryHTML = generateGameSummary();
     $('game-summary-panel').style.display = 'block';
-    typeHTML($('game-summary-text'), summaryHTML, 5);
+    $('game-summary-text').innerHTML = summaryHTML;
 
     // Reset panels
-    ['captain-call-panel','confidence-panel','commentary-panel','extras-panel','export-panel'].forEach(id => $(id).style.display = 'none');
-    $('stats-report-text').textContent = 'Waiting...';
-    $('conditions-report-text').textContent = 'Waiting...';
+    ['captain-call-panel','confidence-panel','commentary-panel','extras-panel','export-panel','win-prob-panel'].forEach(id => $(id).style.display = 'none');
+
+    // ── Fully reset intelligence reports panel ──
+    $('stats-report-text').innerHTML = '<span style="color:var(--text-muted)">Waiting...</span>';
+    $('conditions-report-text').innerHTML = '<span style="color:var(--text-muted)">Waiting...</span>';
+    // Collapse the intel panel so it starts fresh
+    intelContent.style.display = 'none';
+    $('intel-toggle').querySelector('.toggle-icon').textContent = '▶';
+
     $('comm-for').innerHTML = '';
     $('comm-against').innerHTML = '';
     $('comm-neutral').innerHTML = '';
     // Reset pipeline
-    Object.values(steps).forEach(s => { s.classList.remove('active','done'); s.querySelector('.step-status').textContent = 'waiting'; });
+    Object.values(steps).forEach(s => { 
+        s.classList.remove('active','done','streaming'); 
+        s.querySelector('.step-status').textContent = 'waiting'; 
+    });
     $('debate-round-indicator').textContent = '';
+
+    // Reset streaming buffers
+    Object.keys(streamBuffers).forEach(k => delete streamBuffers[k]);
+    Object.keys(activeDebateMsgs).forEach(k => delete activeDebateMsgs[k]);
+    lastRound = 0;
+
+    // Show ticker
+    tickerWrap.style.display = 'flex';
+    tickerText.textContent = '🏏 Captain Cool multi-agent pipeline is loading... Agents are assembling in the strategy room...';
 }
 
 function updateDashScorecard() {
@@ -177,10 +212,15 @@ function buildMessage() {
 
 // ── Run Pipeline via SSE ─────────────────────────────────────
 async function runPipeline(message) {
+    // Create a fresh abort controller for this request
+    currentAbortController = new AbortController();
+    const { signal } = currentAbortController;
+
     const resp = await fetch(`${API}/api/strategy`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ match_state: message })
+        body: JSON.stringify({ match_state: message }),
+        signal
     });
     if (!resp.ok) throw new Error(`Server ${resp.status}: ${resp.statusText}`);
 
@@ -189,54 +229,343 @@ async function runPipeline(message) {
     let buf = '';
     let firstDebate = true;
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const parts = buf.split('\n\n');
-        buf = parts.pop() || '';
-        for (const part of parts) {
-            if (part.startsWith('data: ')) {
-                try { handleEvent(JSON.parse(part.slice(6).trim())); if (firstDebate) { debateContent.innerHTML = ''; firstDebate = false; } } catch {}
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const parts = buf.split('\n\n');
+            buf = parts.pop() || '';
+            for (const part of parts) {
+                if (part.startsWith('data: ')) {
+                    try { 
+                        const ev = JSON.parse(part.slice(6).trim());
+                        if (firstDebate && (ev.agent === 'StrategistCaptain' || ev.agent === 'DevilsAdvocate')) { 
+                            debateContent.innerHTML = ''; 
+                            firstDebate = false; 
+                        }
+                        handleEvent(ev); 
+                    } catch {}
+                }
             }
         }
-    }
-    if (buf.startsWith('data: ')) {
-        try { handleEvent(JSON.parse(buf.slice(6).trim())); } catch {}
+        if (buf.startsWith('data: ')) {
+            try { handleEvent(JSON.parse(buf.slice(6).trim())); } catch {}
+        }
+    } catch (err) {
+        // AbortError is expected when a new query cancels this one — suppress it
+        if (err.name !== 'AbortError') throw err;
     }
 }
 
 // ── Handle Events ────────────────────────────────────────────
 function handleEvent(ev) {
-    const { agent, phase, status, text, round } = ev;
+    const { agent, phase, status, text, round, chunk } = ev;
 
+    // ── Pipeline phase events ──
     if (agent === 'Pipeline') {
         if (phase === 'intelligence') { mark('stats','active'); mark('conditions','active'); }
-        else if (phase === 'debate' && status === 'running') { mark('stats','done'); mark('conditions','done'); mark('debate','active'); }
+        else if (phase === 'debate' && status === 'running') { 
+            mark('stats','done'); mark('conditions','done'); mark('debate','active'); 
+            updateTicker('⚔️ Debate phase starting — agents engaging in tactical battle...');
+        }
         else if (phase === 'debate' && status === 'done') { mark('debate','done'); }
-        else if (phase === 'reflection') { mark('reflection','active'); }
+        else if (phase === 'reflection') { mark('debate','done'); mark('reflection','active'); }
         else if (phase === 'commentary') { mark('reflection','done'); mark('commentary','active'); }
-        else if (phase === 'complete') { mark('commentary','done'); }
+        else if (phase === 'complete') { mark('commentary','done'); finalizeAll(); }
         if (ev.debate_round) { $('debate-round-indicator').textContent = `Round ${ev.debate_round}/5`; }
         return;
     }
 
-    if (agent === 'StatsAnalyst' && text) {
+    // ── Win Probability event ──
+    if (agent === 'WinProbability') {
+        updateWinProbability(ev.before, ev.after, ev.round);
+        return;
+    }
+
+    // ── Streaming start ──
+    if (status === 'streaming_start') {
+        streamBuffers[agent] = '';
+        handleStreamingStart(agent, round);
+        return;
+    }
+
+    // ── Chunk event — live rendering ──
+    if (status === 'streaming' && chunk !== undefined) {
+        streamBuffers[agent] = (streamBuffers[agent] || '') + chunk;
+        handleChunk(agent, chunk, round);
+        return;
+    }
+
+    // ── Done event — finalize ──
+    if (status === 'done' && text) {
+        handleDone(agent, text, round);
+    }
+}
+
+// ── Handle streaming start ───────────────────────────────────
+function handleStreamingStart(agent, round) {
+    if (agent === 'StatsAnalyst') {
+        mark('stats', 'streaming');
+        $('stats-report-text').innerHTML = '<span class="streaming-cursor"></span>';
+        updateTicker('📊 Stats Analyst is gathering player intelligence...');
+    }
+    if (agent === 'ConditionsAgent') {
+        mark('conditions', 'streaming');
+        $('conditions-report-text').innerHTML = '<span class="streaming-cursor"></span>';
+        updateTicker('🌦️ Conditions Agent is analyzing weather and pitch...');
+    }
+    if (agent === 'StrategistCaptain') {
+        mark('debate', 'streaming');
+        $('captain-call-panel').style.display = 'block';
+        const el = $('captain-call-body');
+        el.innerHTML = '<span class="streaming-cursor" id="strategist-cursor"></span>';
+        // Create debate message for streaming
+        const msgEl = getOrCreateDebateMsg('StrategistCaptain', '🧠 Strategist Captain', 'strategist', round);
+        activeDebateMsgs['StrategistCaptain'] = msgEl;
+        updateTicker(`🧠 Strategist Captain is formulating Round ${round} tactical call...`);
+    }
+    if (agent === 'DevilsAdvocate') {
+        const msgEl = getOrCreateDebateMsg('DevilsAdvocate', "😈 Devil's Advocate", 'advocate', round);
+        activeDebateMsgs['DevilsAdvocate'] = msgEl;
+        updateTicker("😈 Devil's Advocate is challenging the strategy...");
+    }
+    if (agent === 'ReflectionAgent') {
+        mark('reflection', 'streaming');
+        updateTicker('🪞 Reflection Agent is performing meta-analysis...');
+    }
+    if (agent === 'CommentaryFor') {
+        mark('commentary', 'streaming');
+        $('commentary-panel').style.display = 'block';
+        $('comm-live-badge').style.display = 'inline';
+        $('comm-for').innerHTML = '<span class="streaming-cursor"></span>';
+        updateTicker('🎙️ Commentators delivering live perspectives...');
+    }
+    if (agent === 'CommentaryAgainst') {
+        $('comm-against').innerHTML = '<span class="streaming-cursor"></span>';
+    }
+    if (agent === 'CommentaryNeutral') {
+        $('comm-neutral').innerHTML = '<span class="streaming-cursor"></span>';
+    }
+}
+
+// ── Handle chunk event ───────────────────────────────────────
+function handleChunk(agent, chunk, round) {
+    const safe = esc(chunk);
+
+    if (agent === 'StatsAnalyst') {
+        const el = $('stats-report-text');
+        const cursor = el.querySelector('.streaming-cursor');
+        const span = document.createElement('span');
+        span.textContent = chunk;
+        if (cursor) el.insertBefore(span, cursor);
+        else el.appendChild(span);
+        // Open intel panel when content starts flowing
+        if (intelContent.style.display === 'none') {
+            intelContent.style.display = 'flex';
+            $('intel-toggle').querySelector('.toggle-icon').textContent = '▼';
+        }
+    }
+
+    if (agent === 'ConditionsAgent') {
+        const el = $('conditions-report-text');
+        const cursor = el.querySelector('.streaming-cursor');
+        const span = document.createElement('span');
+        span.textContent = chunk;
+        if (cursor) el.insertBefore(span, cursor);
+        else el.appendChild(span);
+    }
+
+    if (agent === 'StrategistCaptain') {
+        // Update captain's call body
+        const el = $('captain-call-body');
+        const cursor = el.querySelector('.streaming-cursor');
+        const span = document.createElement('span');
+        span.textContent = chunk;
+        if (cursor) el.insertBefore(span, cursor);
+        else el.appendChild(span);
+
+        // Also update debate message
+        const msgEl = activeDebateMsgs['StrategistCaptain'];
+        if (msgEl) {
+            const textEl = msgEl.querySelector('.msg-text');
+            const cur = textEl.querySelector('.streaming-cursor');
+            const sp = document.createElement('span');
+            sp.textContent = chunk;
+            if (cur) textEl.insertBefore(sp, cur);
+            else textEl.appendChild(sp);
+            debateContent.scrollTop = debateContent.scrollHeight;
+        }
+
+        // Update ticker with beginning of strategist content
+        const currentBuf = streamBuffers['StrategistCaptain'] || '';
+        if (currentBuf.length < 80) {
+            updateTicker(`🧠 Captain Cool: ${currentBuf.replace(/\n/g, ' ')}...`);
+        }
+    }
+
+    if (agent === 'DevilsAdvocate') {
+        const msgEl = activeDebateMsgs['DevilsAdvocate'];
+        if (msgEl) {
+            const textEl = msgEl.querySelector('.msg-text');
+            const cur = textEl.querySelector('.streaming-cursor');
+            const sp = document.createElement('span');
+            sp.textContent = chunk;
+            if (cur) textEl.insertBefore(sp, cur);
+            else textEl.appendChild(sp);
+            debateContent.scrollTop = debateContent.scrollHeight;
+        }
+    }
+
+    if (agent === 'ReflectionAgent') {
+        // Buffer reflected; will finalize on done
+    }
+
+    if (agent === 'CommentaryFor') {
+        const el = $('comm-for');
+        const cursor = el.querySelector('.streaming-cursor');
+        const span = document.createElement('span');
+        span.textContent = chunk;
+        if (cursor) el.insertBefore(span, cursor);
+        else el.appendChild(span);
+    }
+
+    if (agent === 'CommentaryAgainst') {
+        const el = $('comm-against');
+        const cursor = el.querySelector('.streaming-cursor');
+        const span = document.createElement('span');
+        span.textContent = chunk;
+        if (cursor) el.insertBefore(span, cursor);
+        else el.appendChild(span);
+    }
+
+    if (agent === 'CommentaryNeutral') {
+        const el = $('comm-neutral');
+        const cursor = el.querySelector('.streaming-cursor');
+        const span = document.createElement('span');
+        span.textContent = chunk;
+        if (cursor) el.insertBefore(span, cursor);
+        else el.appendChild(span);
+    }
+}
+
+// ── Handle done event ────────────────────────────────────────
+function handleDone(agent, text, round) {
+    if (agent === 'StatsAnalyst') {
         mark('stats','done');
         $('stats-report-text').innerHTML = fmt(text);
     }
-    if (agent === 'ConditionsAgent' && text) {
+    if (agent === 'ConditionsAgent') {
         mark('conditions','done');
         $('conditions-report-text').innerHTML = fmt(text);
     }
-    if (agent === 'StrategistCaptain' && text) addDebateMsg('🧠 Strategist Captain', text, 'strategist', round);
-    if (agent === 'DevilsAdvocate' && text) addDebateMsg("😈 Devil's Advocate", text, 'advocate', round);
-    if (agent === 'JudgeAgent' && text) addDebateMsg('⚖️ Judge', text, 'judge', round);
-    if (agent === 'ReflectionAgent' && text) { mark('reflection','done'); parseReflection(text); }
-    if (agent === 'MatchCommentator' && text) { mark('commentary','done'); parseCommentary(text); }
-    if (agent === 'CommentaryFor' && text) { $('comm-for').innerHTML = fmt(text); $('commentary-panel').style.display = 'block'; }
-    if (agent === 'CommentaryAgainst' && text) { $('comm-against').innerHTML = fmt(text); }
-    if (agent === 'CommentaryNeutral' && text) { $('comm-neutral').innerHTML = fmt(text); }
+    if (agent === 'StrategistCaptain') {
+        // Finalize captain call body
+        $('captain-call-body').innerHTML = fmt(text);
+        // Finalize debate message
+        const msgEl = activeDebateMsgs['StrategistCaptain'];
+        if (msgEl) {
+            msgEl.classList.remove('streaming');
+            msgEl.querySelector('.msg-text').innerHTML = fmt(text);
+            const dotWrap = msgEl.querySelector('.streaming-dots');
+            if (dotWrap) dotWrap.remove();
+        }
+        streamBuffers['StrategistCaptain'] = text;
+    }
+    if (agent === 'DevilsAdvocate') {
+        const msgEl = activeDebateMsgs['DevilsAdvocate'];
+        if (msgEl) {
+            msgEl.classList.remove('streaming');
+            // Remove the animated typing dots from the agent label
+            const dotWrap = msgEl.querySelector('.streaming-dots');
+            if (dotWrap) dotWrap.remove();
+            msgEl.querySelector('.msg-text').innerHTML = fmt(text);
+        }
+    }
+    if (agent === 'JudgeAgent') {
+        addDebateMsg('⚖️ Judge', text, 'judge', round);
+    }
+    if (agent === 'ReflectionAgent') {
+        mark('reflection','done');
+        $('captain-call-panel').style.display = 'block';
+        parseReflection(text);
+    }
+    if (agent === 'MatchCommentator') {
+        mark('commentary','done');
+    }
+    if (agent === 'CommentaryFor') {
+        $('comm-for').innerHTML = fmt(text);
+        $('commentary-panel').style.display = 'block';
+    }
+    if (agent === 'CommentaryAgainst') {
+        $('comm-against').innerHTML = fmt(text);
+    }
+    if (agent === 'CommentaryNeutral') {
+        $('comm-neutral').innerHTML = fmt(text);
+        $('comm-live-badge').style.display = 'none';
+    }
+}
+
+// ── Win Probability Arc ──────────────────────────────────────
+function updateWinProbability(before, after, round) {
+    $('win-prob-panel').style.display = 'block';
+    $('wp-before').textContent = `${before}%`;
+    $('wp-after').textContent = `${after}%`;
+    $('wp-round').textContent = `Round ${round}`;
+    $('win-arc-pct').textContent = `${after}%`;
+
+    // Arc: total arc length = 157 (π * r where r=50)
+    // 0% = dashoffset 157 (empty), 100% = dashoffset 0 (full)
+    const arcLen = 157;
+    const beforeOffset = arcLen - (before / 100) * arcLen;
+    const afterOffset = arcLen - (after / 100) * arcLen;
+
+    const beforeArc = $('win-arc-before');
+    const afterArc = $('win-arc-after');
+
+    // Animate
+    beforeArc.style.strokeDashoffset = beforeOffset;
+    afterArc.style.strokeDashoffset = afterOffset;
+
+    // Color the arc based on probability
+    if (after >= 60) {
+        afterArc.style.stroke = '#3fb950';
+        $('win-arc-pct').style.fill = '#3fb950';
+    } else if (after >= 45) {
+        afterArc.style.stroke = '#f59e0b';
+        $('win-arc-pct').style.fill = '#f59e0b';
+    } else {
+        afterArc.style.stroke = '#f85149';
+        $('win-arc-pct').style.fill = '#f85149';
+    }
+
+    updateTicker(`📈 Win probability update: ${before}% → ${after}% after Round ${round} strategy revision`);
+}
+
+// ── Get or Create Debate Message ─────────────────────────────
+function getOrCreateDebateMsg(agentKey, name, cls, round) {
+    if (round && round > lastRound) {
+        lastRound = round;
+        const tag = document.createElement('div');
+        tag.className = 'debate-round-tag';
+        tag.textContent = `⚔️ DEBATE ROUND ${round}`;
+        debateContent.appendChild(tag);
+    }
+    const el = document.createElement('div');
+    el.className = `debate-msg ${cls} streaming`;
+    el.innerHTML = `
+        <div class="msg-agent">
+            ${name}
+            <span class="streaming-dots">
+                <span class="msg-streaming-dot"></span>
+                <span class="msg-streaming-dot"></span>
+                <span class="msg-streaming-dot"></span>
+            </span>
+        </div>
+        <div class="msg-text"><span class="streaming-cursor"></span></div>`;
+    debateContent.appendChild(el);
+    debateContent.scrollTop = debateContent.scrollHeight;
+    return el;
 }
 
 // ── Debate Messages ──────────────────────────────────────────
@@ -256,6 +585,24 @@ function addDebateMsg(name, text, cls, round) {
     debateContent.scrollTop = debateContent.scrollHeight;
 }
 
+// ── Finalize All ─────────────────────────────────────────────
+function finalizeAll() {
+    $('export-panel').style.display = 'block';
+    updateTicker('✅ Analysis complete! Captain Cool has made the call. Download the full strategy report below.');
+    // Stop ticker animation after a moment
+    setTimeout(() => {
+        tickerText.style.animation = 'none';
+    }, 3000);
+}
+
+// ── Update Ticker ────────────────────────────────────────────
+function updateTicker(message) {
+    tickerText.textContent = message;
+    tickerText.style.animation = 'none';
+    tickerText.offsetHeight; // reflow
+    tickerText.style.animation = 'ticker-scroll 20s linear infinite';
+}
+
 // ── Parse Reflection → Confidence + Extras ───────────────────
 function parseReflection(text) {
     // Extract confidence score
@@ -267,49 +614,19 @@ function parseReflection(text) {
         $('confidence-bar').style.width = `${score * 10}%`;
         const labels = ['','Desperate','Desperate','Risky','Risky','Coin-flip','Coin-flip','Strong','Strong','No-brainer','No-brainer'];
         $('confidence-label').textContent = labels[score] || '';
-        // Color the bar based on score
         if (score >= 7) $('confidence-bar').style.background = 'linear-gradient(90deg, var(--accent-green), var(--accent-cyan))';
         else if (score >= 5) $('confidence-bar').style.background = 'linear-gradient(90deg, var(--accent-gold), var(--accent-blue))';
         else $('confidence-bar').style.background = 'linear-gradient(90deg, var(--accent-red), var(--accent-gold))';
     }
 
-    // Extract counterfactual & flashback
-    const sections = text.split(/\*\*(?:Counterfactual|COUNTERFACTUAL|Road Not Taken|Blind Spot|IPL Parallel|HISTORICAL|Historical|IPL Flashback)\*\*/i);
-    
-    // Show extras panel with full reflection text split
+    // Show extras panel
     $('extras-panel').style.display = 'block';
     
-    // Try to extract specific sections
     const counterMatch = text.match(/(?:Counterfactual|COUNTERFACTUAL|Road Not Taken)[:\s*]*\n?([\s\S]*?)(?=\*\*|$)/i);
     const flashMatch = text.match(/(?:IPL Parallel|HISTORICAL|Historical|IPL Flashback|Parallel)[:\s*]*\n?([\s\S]*?)(?=\*\*|$)/i);
     
     $('counterfactual-text').innerHTML = counterMatch ? fmt(counterMatch[1].trim()) : fmt(text.substring(0, 300));
     $('flashback-text').innerHTML = flashMatch ? fmt(flashMatch[1].trim()) : '<span style="color:var(--text-muted)">See reflection report</span>';
-}
-
-// ── Typewriter Streaming Effect ─────────────────────────────
-function typeHTML(el, html, speed = 6) {
-    el.innerHTML = '';
-    let i = 0;
-    let isTag = false;
-    let text = '';
-    
-    function type() {
-        if (i < html.length) {
-            let char = html[i];
-            if (char === '<') isTag = true;
-            text += char;
-            if (char === '>') isTag = false;
-            i++;
-            if (isTag) {
-                type();
-            } else {
-                el.innerHTML = text;
-                setTimeout(type, speed);
-            }
-        }
-    }
-    type();
 }
 
 // ── Export Report Feature ────────────────────────────────────
@@ -320,7 +637,10 @@ function downloadReport() {
     md += `- **Teams**: ${$('batting-team').value} vs ${$('bowling-team').value}\n`;
     md += `- **Score**: ${$('runs').value}/${$('wickets').value} after ${$('over').value}.${$('ball').value} overs\n`;
     if ($('innings').value === '2') {
-        md += `- **Target**: ${$('target').value} (Need ${$('sc-need').textContent} from ${$('sc-balls').textContent} balls, RRR: ${$('sc-rrr').textContent})\n`;
+        const need = $('sc-need').textContent;
+        const balls = $('sc-balls').textContent;
+        const rrr = $('sc-rrr').textContent;
+        md += `- **Target**: ${$('target').value} (Need ${need} from ${balls} balls, RRR: ${rrr})\n`;
     }
     md += `- **Venue**: ${$('venue').value} (Pitch: ${$('pitch').value}, Dew: ${$('dew').value})\n`;
     md += `- **Batsmen**: Striker: ${$('striker').value}, Non-Striker: ${$('non-striker').value}\n\n`;
@@ -329,10 +649,14 @@ function downloadReport() {
     md += `### Stats Analyst Intelligence\n${$('stats-report-text').innerText}\n\n`;
     md += `### Conditions Agent Assessment\n${$('conditions-report-text').innerText}\n\n`;
     
+    md += `## 📈 WIN PROBABILITY\n`;
+    md += `- **Before**: ${$('wp-before').textContent}\n`;
+    md += `- **After**: ${$('wp-after').textContent}\n\n`;
+    
     md += `## ⚔️ AGENT DEBATE TRANSCRIPT\n`;
     const msgs = debateContent.querySelectorAll('.debate-msg');
     msgs.forEach(m => {
-        const agent = m.querySelector('.msg-agent').innerText;
+        const agent = m.querySelector('.msg-agent').innerText.replace(/\n.*/g,'').trim();
         const body = m.querySelector('.msg-text').innerText;
         md += `### ${agent}\n${body}\n\n`;
     });
@@ -347,50 +671,26 @@ function downloadReport() {
     md += `### 👎 Sanjay Manjrekar (Against perspective)\n${$('comm-against').innerText}\n\n`;
     md += `### ⚖️ Harsha Bhogle (Balanced Neutral perspective)\n${$('comm-neutral').innerText}\n\n`;
     
-    md += `\n---\n*Powered by Google Gemini 2.5 Pro + Flash, Google ADK & Antigravity.*`;
+    md += `\n---\n*Powered by Google Gemini 2.5 Pro + Flash, Google ADK & Antigravity. Real-time streaming pipeline.*`;
     
     const blob = new Blob([md], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Captain_Cool_Strategy_Report_${$('batting-team').value}_vs_${$('bowling-team').value}.md`;
+    a.download = `Captain_Cool_Strategy_${$('batting-team').value}_vs_${$('bowling-team').value}_${Date.now()}.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
 }
 
-// ── Parse Commentary → Multi-perspective ─────────────────────
-function parseCommentary(text) {
-    $('captain-call-panel').style.display = 'block';
-    
-    // Extract Captain's Call section
-    const callMatch = text.match(/(?:THE CAPTAIN'S CALL|Captain's Call)[:\s*]*\n?([\s\S]*?)(?=📊|WHY|$)/i);
-    const callHTML = callMatch ? fmt(callMatch[1].trim()) : fmt(text.substring(0, 200));
-    typeHTML($('captain-call-body'), callHTML, 6);
-
-    // The full commentary goes to "For" tab (supporting the decision)
-    $('commentary-panel').style.display = 'block';
-    typeHTML($('comm-for'), fmt(text), 6);
-    
-    // Show the export report panel since generation is fully landing
-    $('export-panel').style.display = 'block';
-    
-    // The against/neutral will be populated by separate agent calls from server
-    if (!$('comm-against').innerHTML) {
-        $('comm-against').innerHTML = '<span style="color:var(--text-muted)">⏳ Generating opposing viewpoint...</span>';
-    }
-    if (!$('comm-neutral').innerHTML) {
-        $('comm-neutral').innerHTML = '<span style="color:var(--text-muted)">⏳ Generating balanced analysis...</span>';
-    }
-}
-
 // ── Pipeline Steps ───────────────────────────────────────────
 function mark(id, state) {
     const s = steps[id]; if (!s) return;
-    s.classList.remove('active','done');
+    s.classList.remove('active','done','streaming');
     s.classList.add(state);
-    s.querySelector('.step-status').textContent = state === 'active' ? 'running...' : state === 'done' ? '✓ done' : 'waiting';
+    const statusMap = { active: 'running...', done: '✓ done', streaming: '⚡ streaming' };
+    s.querySelector('.step-status').textContent = statusMap[state] || 'waiting';
 }
 
 // ── Format Text ──────────────────────────────────────────────
@@ -428,7 +728,11 @@ document.querySelectorAll('.comm-tab').forEach(tab => {
     });
 });
 
-backBtn.addEventListener('click', () => { dashboard.style.display = 'none'; inputPanel.style.display = 'block'; lastRound = 0; });
+backBtn.addEventListener('click', () => { 
+    dashboard.style.display = 'none'; 
+    inputPanel.style.display = 'block'; 
+    lastRound = 0; 
+});
 
 // Innings toggle
 $('innings').addEventListener('change', e => {
@@ -439,7 +743,15 @@ $('innings').addEventListener('change', e => {
 });
 
 // Health check
-fetch(`${API}/api/health`).then(r => r.ok && ($('status-badge').textContent = '● Online', $('status-badge').classList.add('online'))).catch(() => {});
+fetch(`${API}/api/health`)
+    .then(r => r.ok && r.json())
+    .then(data => { 
+        if (data) {
+            $('status-badge').textContent = '● Online'; 
+            $('status-badge').classList.add('online');
+        }
+    })
+    .catch(() => {});
 
 // Export Strategy button listener
 $('export-btn').addEventListener('click', downloadReport);

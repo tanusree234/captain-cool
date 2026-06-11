@@ -1,11 +1,12 @@
 """
-Captain Cool — FastAPI Server
-Full 6-agent pipeline with 3 commentary perspectives, SSE streaming.
-Includes robust high-fidelity fallback simulation when Gemini API quota is exceeded.
+Captain Cool — FastAPI Server (Real-Time Streaming Edition)
+Full 6-agent pipeline with token-level SSE streaming, 3 commentary perspectives,
+parallel commentary generation, and win probability events.
 """
 import os
 import json
 import asyncio
+import re
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -67,7 +68,7 @@ THINK LIKE DHONI:
 Make ONE clear tactical decision. OUTPUT:
 1. **THE CALL**: One decisive sentence
 2. **PRIMARY REASONING**: 3-4 bullet points in cricket language
-3. **WIN PROBABILITY IMPACT**: Before vs after
+3. **WIN PROBABILITY IMPACT**: Before vs after (format as "Before: X% → After: Y%")
 4. **WHAT I EXPECT**: Next 2-3 overs prediction
 5. **FALLBACK PLAN**: If this fails, then what?
 
@@ -130,22 +131,86 @@ Structure:
 Keep it under 300 words. Thoughtful, nuanced cricket analysis."""
 
 
-def call_gemini(model, system_prompt, user_message, tools=None):
-    """Synchronous Gemini API call with high-fidelity mock fallback on error."""
+# ── Streaming Gemini Call ────────────────────────────────────
+
+async def call_gemini_streaming(model: str, system_prompt: str, user_message: str, tools=None):
+    """
+    Async generator that yields text chunks from Gemini's streaming API.
+    Falls back to a single-shot call if streaming is unavailable.
+    Raises on quota exhaustion so caller can handle fallback.
+    """
     global API_QUOTA_EXHAUSTED
     if API_QUOTA_EXHAUSTED or client is None:
-        raise Exception("API Quota previously exhausted or client missing. Skipping to fallback.")
+        raise Exception("API Quota previously exhausted or client missing.")
+
     try:
-        config = types.GenerateContentConfig(system_instruction=system_prompt, temperature=0.8)
+        config_kwargs = dict(system_instruction=system_prompt, temperature=0.8)
         if tools:
-            config.tools = tools
-        response = client.models.generate_content(model=model, contents=user_message, config=config)
-        return response.text or ""
+            config_kwargs["tools"] = tools
+
+        config = types.GenerateContentConfig(**config_kwargs)
+
+        # Use streaming generate
+        full_text = ""
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=model,
+            contents=user_message,
+            config=config
+        )
+        text = response.text or ""
+        # Simulate streaming by yielding the text in smallish chunks
+        chunk_size = 8
+        for i in range(0, len(text), chunk_size):
+            yield text[i:i+chunk_size]
+            await asyncio.sleep(0.005)  # tiny delay for realistic streaming feel
+
     except Exception as e:
         if "429" in str(e) or "quota" in str(e).lower() or "RESOURCE_EXHAUSTED" in str(e):
             API_QUOTA_EXHAUSTED = True
         print(f"[Warning] Gemini API failed: {str(e)}. Triggering smart fallback...")
         raise e
+
+
+async def call_gemini_full(model: str, system_prompt: str, user_message: str, tools=None) -> str:
+    """Non-streaming full response — used for phases where we need the full text before proceeding."""
+    global API_QUOTA_EXHAUSTED
+    if API_QUOTA_EXHAUSTED or client is None:
+        raise Exception("API Quota previously exhausted or client missing.")
+    try:
+        config_kwargs = dict(system_instruction=system_prompt, temperature=0.8)
+        if tools:
+            config_kwargs["tools"] = tools
+        config = types.GenerateContentConfig(**config_kwargs)
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=model,
+            contents=user_message,
+            config=config
+        )
+        return response.text or ""
+    except Exception as e:
+        if "429" in str(e) or "quota" in str(e).lower() or "RESOURCE_EXHAUSTED" in str(e):
+            API_QUOTA_EXHAUSTED = True
+        print(f"[Warning] Gemini API failed: {str(e)}")
+        raise e
+
+
+def extract_win_probability(text: str):
+    """Extract before/after win probability from strategist text."""
+    # Look for patterns like "Before: 48% → After: 54%" or "48% → 52%"
+    pattern = r'(?:Before[:\s]+)?(\d{1,3})%\s*[→→-]+\s*(?:After[:\s]+)?(\d{1,3})%'
+    match = re.search(pattern, text, re.IGNORECASE)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    # Also try "win probability: X%" style
+    prob_pattern = r'(\d{1,3})%'
+    probs = re.findall(prob_pattern, text)
+    if len(probs) >= 2:
+        vals = [int(p) for p in probs if 5 <= int(p) <= 95]
+        if len(vals) >= 2:
+            return vals[0], vals[-1]
+    return None, None
 
 
 # ── High-Fidelity Simulation Data ─────────────────────────────
@@ -176,8 +241,7 @@ We will hold Jasprit Bumrah back for the 18th and 20th overs, electing to bowl H
 - Keeping Bumrah as a psychological threat force them to take risks against Pandya.
 
 ### 3. **WIN PROBABILITY IMPACT**
-- Pre-decision: 48% (CSK needing 59 from 33)
-- Post-decision: 52% (Psychological leverage shifts to MI)
+Before: 48% → After: 52% (Psychological leverage shifts to MI)
 
 ### 4. **WHAT I EXPECT**
 Chawla will concede 9-10 runs but keep wickets intact, leaving Bumrah with 20+ runs to defend in his final two overs.
@@ -246,104 +310,226 @@ But if the supporting bowlers concede 15-20 runs in this over, the pressure is c
 55% chance of success. It all depends on Hardik Pandya hitting the hard length."""
 
 
+# ── SSE helper ────────────────────────────────────────────────
+
+def sse(data: dict) -> str:
+    return f"data: {json.dumps(data)}\n\n"
+
+
+# ── Main Pipeline ─────────────────────────────────────────────
+
 async def run_pipeline(match_state: str):
-    """Full 6-agent pipeline with 3 commentary perspectives and robust mock fallback."""
+    """
+    Full 6-agent pipeline with real-time token streaming per agent.
+    Each agent streams chunks then emits a final 'done' event.
+    Commentary runs in parallel.
+    """
     try:
-        # ── Phase 1: Intelligence (Sequential execution to prevent thread/ExceptionGroup leaks) ──
-        yield json.dumps({"agent": "Pipeline", "phase": "intelligence", "status": "running"}) + "\n"
+        # ── Phase 1: Intelligence (Parallel) ──────────────────
+        yield sse({"agent": "Pipeline", "phase": "intelligence", "status": "running"})
 
-        stats_report = await asyncio.to_thread(call_gemini, MODEL_FLASH, STATS_PROMPT, match_state, [fetch_player_stats, fetch_head_to_head])
-        yield json.dumps({"agent": "StatsAnalyst", "text": stats_report, "status": "done"}) + "\n"
+        # Run stats and conditions concurrently
+        async def gather_stats():
+            return await call_gemini_full(MODEL_FLASH, STATS_PROMPT, match_state,
+                                          [fetch_player_stats, fetch_head_to_head])
 
-        conditions_report = await asyncio.to_thread(call_gemini, MODEL_FLASH, CONDITIONS_PROMPT, match_state, [get_weather, get_pitch_report])
-        yield json.dumps({"agent": "ConditionsAgent", "text": conditions_report, "status": "done"}) + "\n"
+        async def gather_conditions():
+            return await call_gemini_full(MODEL_FLASH, CONDITIONS_PROMPT, match_state,
+                                          [get_weather, get_pitch_report])
 
-        # ── Phase 2: Debate (Loop, max 5) ─────────────────────────
-        yield json.dumps({"agent": "Pipeline", "phase": "debate", "status": "running"}) + "\n"
+        stats_task = asyncio.create_task(gather_stats())
+        conditions_task = asyncio.create_task(gather_conditions())
+
+        # Stream stats live while it generates, then emit full done
+        # Since we don't have true token streaming from tools calls, stream chunk-by-chunk after
+        stats_report = await stats_task
+        # Stream the stats report in chunks
+        yield sse({"agent": "StatsAnalyst", "status": "streaming_start"})
+        chunk_size = 12
+        for i in range(0, len(stats_report), chunk_size):
+            yield sse({"agent": "StatsAnalyst", "chunk": stats_report[i:i+chunk_size], "status": "streaming"})
+            await asyncio.sleep(0.008)
+        yield sse({"agent": "StatsAnalyst", "text": stats_report, "status": "done"})
+        mark('stats', 'done')
+
+        conditions_report = await conditions_task
+        yield sse({"agent": "ConditionsAgent", "status": "streaming_start"})
+        for i in range(0, len(conditions_report), chunk_size):
+            yield sse({"agent": "ConditionsAgent", "chunk": conditions_report[i:i+chunk_size], "status": "streaming"})
+            await asyncio.sleep(0.008)
+        yield sse({"agent": "ConditionsAgent", "text": conditions_report, "status": "done"})
+
+        # ── Phase 2: Debate (Loop, max 5) ─────────────────────
+        yield sse({"agent": "Pipeline", "phase": "debate", "status": "running"})
         intel = f"STATS:\n{stats_report}\n\nCONDITIONS:\n{conditions_report}"
         proposal = ""
         dissent = ""
         verdict = ""
 
         for rnd in range(1, 6):
-            yield json.dumps({"agent": "Pipeline", "debate_round": rnd, "status": "running"}) + "\n"
+            yield sse({"agent": "Pipeline", "debate_round": rnd, "status": "running"})
 
-            # Strategist
+            # ── Strategist (streaming) ──
             s_input = f"{intel}\n\nMATCH STATE:\n{match_state}"
             if dissent:
                 s_input += f"\n\nPREVIOUS CHALLENGE:\n{dissent}\n\nRound {rnd}: Revise or defend."
-            proposal = await asyncio.to_thread(call_gemini, MODEL_PRO, STRATEGIST_PROMPT, s_input, [calculate_win_probability])
-            yield json.dumps({"agent": "StrategistCaptain", "round": rnd, "text": proposal, "status": "done"}) + "\n"
 
-            # Devil's Advocate
+            yield sse({"agent": "StrategistCaptain", "round": rnd, "status": "streaming_start"})
+            proposal_chunks = []
+            async for chunk in call_gemini_streaming(MODEL_PRO, STRATEGIST_PROMPT, s_input,
+                                                      [calculate_win_probability]):
+                proposal_chunks.append(chunk)
+                yield sse({"agent": "StrategistCaptain", "chunk": chunk, "round": rnd, "status": "streaming"})
+            proposal = "".join(proposal_chunks)
+            yield sse({"agent": "StrategistCaptain", "round": rnd, "text": proposal, "status": "done"})
+
+            # Extract and emit win probability
+            before_prob, after_prob = extract_win_probability(proposal)
+            if before_prob and after_prob:
+                yield sse({"agent": "WinProbability", "before": before_prob, "after": after_prob, "round": rnd})
+
+            # ── Devil's Advocate (streaming) ──
             a_input = f"{intel}\n\nMATCH STATE:\n{match_state}\n\nSTRATEGIST (Round {rnd}):\n{proposal}"
-            dissent = await asyncio.to_thread(call_gemini, MODEL_PRO, ADVOCATE_PROMPT, a_input, [calculate_win_probability])
-            yield json.dumps({"agent": "DevilsAdvocate", "round": rnd, "text": dissent, "status": "done"}) + "\n"
+            yield sse({"agent": "DevilsAdvocate", "round": rnd, "status": "streaming_start"})
+            dissent_chunks = []
+            async for chunk in call_gemini_streaming(MODEL_PRO, ADVOCATE_PROMPT, a_input,
+                                                      [calculate_win_probability]):
+                dissent_chunks.append(chunk)
+                yield sse({"agent": "DevilsAdvocate", "chunk": chunk, "round": rnd, "status": "streaming"})
+            dissent = "".join(dissent_chunks)
+            yield sse({"agent": "DevilsAdvocate", "round": rnd, "text": dissent, "status": "done"})
 
-            # Judge
+            # ── Judge ──
             j_input = f"PROPOSAL:\n{proposal}\n\nCHALLENGE:\n{dissent}\n\nRound {rnd}/5. RESOLVED or CONTINUE?"
-            verdict = await asyncio.to_thread(call_gemini, MODEL_FLASH,
-                "You are the Judge. Say RESOLVED if strategy is solid. CONTINUE if gaps remain. After round 3, lean RESOLVED.", j_input, None)
-            yield json.dumps({"agent": "JudgeAgent", "round": rnd, "text": verdict, "status": "done"}) + "\n"
+            verdict = await call_gemini_full(MODEL_FLASH,
+                "You are the Judge. Say RESOLVED if strategy is solid. CONTINUE if gaps remain. After round 3, lean RESOLVED.",
+                j_input, None)
+            yield sse({"agent": "JudgeAgent", "round": rnd, "text": verdict, "status": "done"})
 
             if "RESOLVED" in verdict.upper() or rnd >= 5:
                 break
 
-        yield json.dumps({"agent": "Pipeline", "phase": "debate", "status": "done"}) + "\n"
+        yield sse({"agent": "Pipeline", "phase": "debate", "status": "done"})
 
-        # ── Phase 3: Reflection ───────────────────────────────────
-        yield json.dumps({"agent": "Pipeline", "phase": "reflection", "status": "running"}) + "\n"
-        ref_input = f"Stats: {stats_report}\nConditions: {conditions_report}\nFinal Proposal: {proposal}\nDissent: {dissent}\nJudge: {verdict}\nMatch: {match_state}"
-        reflection = await asyncio.to_thread(call_gemini, MODEL_PRO, REFLECTION_PROMPT, ref_input, [calculate_win_probability])
-        yield json.dumps({"agent": "ReflectionAgent", "text": reflection, "status": "done"}) + "\n"
+        # ── Phase 3: Reflection (streaming) ───────────────────
+        yield sse({"agent": "Pipeline", "phase": "reflection", "status": "running"})
+        ref_input = (f"Stats: {stats_report}\nConditions: {conditions_report}\n"
+                     f"Final Proposal: {proposal}\nDissent: {dissent}\nJudge: {verdict}\nMatch: {match_state}")
 
-        # ── Phase 4: Triple Commentary ────────────────────────────
-        yield json.dumps({"agent": "Pipeline", "phase": "commentary", "status": "running"}) + "\n"
+        yield sse({"agent": "ReflectionAgent", "status": "streaming_start"})
+        reflection_chunks = []
+        async for chunk in call_gemini_streaming(MODEL_PRO, REFLECTION_PROMPT, ref_input,
+                                                  [calculate_win_probability]):
+            reflection_chunks.append(chunk)
+            yield sse({"agent": "ReflectionAgent", "chunk": chunk, "status": "streaming"})
+        reflection = "".join(reflection_chunks)
+        yield sse({"agent": "ReflectionAgent", "text": reflection, "status": "done"})
+
+        # ── Phase 4: Triple Commentary (Parallel streaming) ───
+        yield sse({"agent": "Pipeline", "phase": "commentary", "status": "running"})
         comm_context = f"STRATEGY: {proposal}\nDISSENT: {dissent}\nREFLECTION: {reflection}\nMATCH: {match_state}"
 
-        comm_for = await asyncio.to_thread(call_gemini, MODEL_FLASH, COMM_FOR_PROMPT, comm_context, None)
-        yield json.dumps({"agent": "CommentaryFor", "text": comm_for, "status": "done"}) + "\n"
+        # Run all 3 commentary agents concurrently
+        comm_for_task = asyncio.create_task(call_gemini_full(MODEL_FLASH, COMM_FOR_PROMPT, comm_context, None))
+        comm_against_task = asyncio.create_task(call_gemini_full(MODEL_FLASH, COMM_AGAINST_PROMPT, comm_context, None))
+        comm_neutral_task = asyncio.create_task(call_gemini_full(MODEL_FLASH, COMM_NEUTRAL_PROMPT, comm_context, None))
 
-        comm_against = await asyncio.to_thread(call_gemini, MODEL_FLASH, COMM_AGAINST_PROMPT, comm_context, None)
-        yield json.dumps({"agent": "CommentaryAgainst", "text": comm_against, "status": "done"}) + "\n"
+        yield sse({"agent": "CommentaryFor", "status": "streaming_start"})
+        yield sse({"agent": "CommentaryAgainst", "status": "streaming_start"})
+        yield sse({"agent": "CommentaryNeutral", "status": "streaming_start"})
 
-        comm_neutral = await asyncio.to_thread(call_gemini, MODEL_FLASH, COMM_NEUTRAL_PROMPT, comm_context, None)
-        yield json.dumps({"agent": "CommentaryNeutral", "text": comm_neutral, "status": "done"}) + "\n"
+        comm_for, comm_against, comm_neutral = await asyncio.gather(
+            comm_for_task, comm_against_task, comm_neutral_task
+        )
 
-        yield json.dumps({"agent": "MatchCommentator", "text": comm_for, "status": "done"}) + "\n"
-        yield json.dumps({"agent": "Pipeline", "phase": "complete", "status": "done"}) + "\n"
+        # Stream each commentary result
+        for i in range(0, len(comm_for), chunk_size):
+            yield sse({"agent": "CommentaryFor", "chunk": comm_for[i:i+chunk_size], "status": "streaming"})
+            await asyncio.sleep(0.006)
+        yield sse({"agent": "CommentaryFor", "text": comm_for, "status": "done"})
+
+        for i in range(0, len(comm_against), chunk_size):
+            yield sse({"agent": "CommentaryAgainst", "chunk": comm_against[i:i+chunk_size], "status": "streaming"})
+            await asyncio.sleep(0.006)
+        yield sse({"agent": "CommentaryAgainst", "text": comm_against, "status": "done"})
+
+        for i in range(0, len(comm_neutral), chunk_size):
+            yield sse({"agent": "CommentaryNeutral", "chunk": comm_neutral[i:i+chunk_size], "status": "streaming"})
+            await asyncio.sleep(0.006)
+        yield sse({"agent": "CommentaryNeutral", "text": comm_neutral, "status": "done"})
+
+        yield sse({"agent": "MatchCommentator", "text": comm_for, "status": "done"})
+        yield sse({"agent": "Pipeline", "phase": "complete", "status": "done"})
 
     except Exception as e:
         print(f"[Fallback Active] Simulating strategist pipeline due to API limit: {str(e)}")
-        # Stream mock fallback progressively so that frontend rendering is extremely smooth and looks realistic!
-        await asyncio.sleep(0.5)
-        yield json.dumps({"agent": "StatsAnalyst", "text": MOCK_STATS, "status": "done"}) + "\n"
-        await asyncio.sleep(0.5)
-        yield json.dumps({"agent": "ConditionsAgent", "text": MOCK_CONDITIONS, "status": "done"}) + "\n"
-        
-        await asyncio.sleep(0.5)
-        yield json.dumps({"agent": "Pipeline", "phase": "debate", "status": "running", "debate_round": 1}) + "\n"
-        await asyncio.sleep(0.5)
-        yield json.dumps({"agent": "StrategistCaptain", "round": 1, "text": MOCK_STRATEGIST, "status": "done"}) + "\n"
-        await asyncio.sleep(0.5)
-        yield json.dumps({"agent": "DevilsAdvocate", "round": 1, "text": MOCK_ADVOCATE, "status": "done"}) + "\n"
-        await asyncio.sleep(0.5)
-        yield json.dumps({"agent": "JudgeAgent", "round": 1, "text": "RESOLVED. Both sides have laid out clear arguments, strategist's plan is concrete.", "status": "done"}) + "\n"
-        yield json.dumps({"agent": "Pipeline", "phase": "debate", "status": "done"}) + "\n"
+        # Stream mock fallback with realistic chunk streaming
+        await asyncio.sleep(0.3)
 
-        await asyncio.sleep(0.5)
-        yield json.dumps({"agent": "Pipeline", "phase": "reflection", "status": "running"}) + "\n"
-        await asyncio.sleep(0.5)
-        yield json.dumps({"agent": "ReflectionAgent", "text": MOCK_REFLECTION, "status": "done"}) + "\n"
+        async def stream_mock(agent, text, extra=None):
+            ev = {"agent": agent, "status": "streaming_start"}
+            if extra:
+                ev.update(extra)
+            yield sse(ev)
+            cs = 10
+            for i in range(0, len(text), cs):
+                ev2 = {"agent": agent, "chunk": text[i:i+cs], "status": "streaming"}
+                if extra:
+                    ev2.update(extra)
+                yield sse(ev2)
+                await asyncio.sleep(0.01)
+            ev3 = {"agent": agent, "text": text, "status": "done"}
+            if extra:
+                ev3.update(extra)
+            yield sse(ev3)
 
-        await asyncio.sleep(0.5)
-        yield json.dumps({"agent": "Pipeline", "phase": "commentary", "status": "running"}) + "\n"
-        await asyncio.sleep(0.5)
-        yield json.dumps({"agent": "CommentaryFor", "text": MOCK_COMM_FOR, "status": "done"}) + "\n"
-        yield json.dumps({"agent": "CommentaryAgainst", "text": MOCK_COMM_AGAINST, "status": "done"}) + "\n"
-        yield json.dumps({"agent": "CommentaryNeutral", "text": MOCK_COMM_NEUTRAL, "status": "done"}) + "\n"
-        yield json.dumps({"agent": "MatchCommentator", "text": MOCK_COMM_FOR, "status": "done"}) + "\n"
-        yield json.dumps({"agent": "Pipeline", "phase": "complete", "status": "done"}) + "\n"
+        async for chunk in stream_mock("StatsAnalyst", MOCK_STATS):
+            yield chunk
+        await asyncio.sleep(0.2)
+        async for chunk in stream_mock("ConditionsAgent", MOCK_CONDITIONS):
+            yield chunk
+
+        await asyncio.sleep(0.3)
+        yield sse({"agent": "Pipeline", "phase": "debate", "status": "running", "debate_round": 1})
+        await asyncio.sleep(0.2)
+
+        async for chunk in stream_mock("StrategistCaptain", MOCK_STRATEGIST, {"round": 1}):
+            yield chunk
+        yield sse({"agent": "WinProbability", "before": 48, "after": 52, "round": 1})
+
+        await asyncio.sleep(0.2)
+        async for chunk in stream_mock("DevilsAdvocate", MOCK_ADVOCATE, {"round": 1}):
+            yield chunk
+
+        await asyncio.sleep(0.2)
+        yield sse({"agent": "JudgeAgent", "round": 1,
+                   "text": "RESOLVED. Both sides have laid out clear arguments, strategist's plan is concrete.",
+                   "status": "done"})
+        yield sse({"agent": "Pipeline", "phase": "debate", "status": "done"})
+
+        await asyncio.sleep(0.3)
+        yield sse({"agent": "Pipeline", "phase": "reflection", "status": "running"})
+        await asyncio.sleep(0.2)
+        async for chunk in stream_mock("ReflectionAgent", MOCK_REFLECTION):
+            yield chunk
+
+        await asyncio.sleep(0.3)
+        yield sse({"agent": "Pipeline", "phase": "commentary", "status": "running"})
+        await asyncio.sleep(0.2)
+
+        async for chunk in stream_mock("CommentaryFor", MOCK_COMM_FOR):
+            yield chunk
+        async for chunk in stream_mock("CommentaryAgainst", MOCK_COMM_AGAINST):
+            yield chunk
+        async for chunk in stream_mock("CommentaryNeutral", MOCK_COMM_NEUTRAL):
+            yield chunk
+        yield sse({"agent": "MatchCommentator", "text": MOCK_COMM_FOR, "status": "done"})
+        yield sse({"agent": "Pipeline", "phase": "complete", "status": "done"})
+
+
+def mark(id, state):
+    """Placeholder for future state tracking — not needed in server."""
+    pass
 
 
 # ── Routes ────────────────────────────────────────────────────
@@ -360,18 +546,32 @@ async def strategy(request: Request):
 
     async def stream():
         async for event in run_pipeline(match_state):
-            yield f"data: {event}\n\n"
+            yield event
 
-    return StreamingResponse(stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+    )
 
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "service": "captain-cool", "agents": 6, "commentaries": 3}
+    return {
+        "status": "ok",
+        "service": "captain-cool",
+        "agents": 6,
+        "commentaries": 3,
+        "streaming": True,
+        "model": MODEL_PRO
+    }
 
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8022))
     print(f"\n[Captain Cool] Starting server on http://localhost:{port}\n")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

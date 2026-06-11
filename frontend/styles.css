@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════
-   Captain Cool — Premium Dark Dashboard CSS
+   Captain Cool — Premium Dark Dashboard CSS (Streaming Edition)
    ═══════════════════════════════════════════════════════════════ */
 :root {
     --bg-primary: #06080f;
@@ -62,6 +62,8 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .badge-gemini { background:rgba(88,166,255,0.12); color:var(--accent-blue); border-color:rgba(88,166,255,0.25); }
 .badge-adk { background:rgba(63,185,80,0.12); color:var(--accent-green); border-color:rgba(63,185,80,0.25); }
 .badge-agents { background:rgba(188,140,255,0.12); color:var(--accent-purple); border-color:rgba(188,140,255,0.25); }
+.badge-stream { background:rgba(245,158,11,0.12); color:var(--accent-gold); border-color:rgba(245,158,11,0.25); animation: stream-pulse 2s ease-in-out infinite; }
+@keyframes stream-pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
 .badge-live { background:rgba(248,81,73,0.12); color:var(--accent-red); border-color:rgba(248,81,73,0.25); transition: all 0.3s; }
 .badge-live.online { background:rgba(63,185,80,0.12); color:var(--accent-green); border-color:rgba(63,185,80,0.25); }
 
@@ -105,6 +107,14 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .spinner { display:inline-block; width:16px; height:16px; border:2px solid rgba(255,255,255,0.3); border-top-color:white; border-radius:50%; animation:spin 0.7s linear infinite; vertical-align:middle; margin-right:6px; }
 @keyframes spin { to{transform:rotate(360deg)} }
 
+/* ── Live Ticker ─────────────────────────────────────────── */
+.ticker-wrap { display:flex; align-items:center; gap:10px; background:rgba(248,81,73,0.08); border:1px solid rgba(248,81,73,0.2); border-radius:var(--radius-xs); padding:8px 14px; margin-bottom:12px; overflow:hidden; }
+.ticker-label { font-size:0.6rem; font-weight:800; color:var(--accent-red); letter-spacing:1px; text-transform:uppercase; animation: live-blink 1.5s ease-in-out infinite; flex-shrink:0; }
+@keyframes live-blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.ticker-content { flex:1; overflow:hidden; }
+.ticker-text { font-size:0.75rem; color:var(--text-secondary); white-space:nowrap; animation: ticker-scroll 25s linear infinite; display:inline-block; }
+@keyframes ticker-scroll { 0%{transform:translateX(100%)} 100%{transform:translateX(-100%)} }
+
 /* ── Dashboard Top Bar ───────────────────────────────────── */
 .dash-topbar { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; flex-wrap:wrap; gap:10px; }
 .back-btn { background:var(--bg-glass); border:1px solid var(--border-glass); color:var(--text-secondary); padding:6px 14px; border-radius:var(--radius-xs); cursor:pointer; font-size:0.78rem; font-weight:500; transition:all 0.2s; }
@@ -121,12 +131,15 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .pipeline-step { display:flex; align-items:center; gap:8px; padding:8px 12px; border-radius:var(--radius-sm); transition:all 0.4s; position:relative; min-width:fit-content; }
 .pipeline-step .step-dot { width:8px; height:8px; border-radius:50%; background:var(--text-muted); transition:all 0.3s; flex-shrink:0; }
 .pipeline-step.active .step-dot { background:var(--accent-gold); box-shadow:0 0 8px var(--accent-gold-glow); animation:dot-pulse 1.5s infinite; }
+.pipeline-step.streaming .step-dot { background:var(--accent-cyan); box-shadow:0 0 8px rgba(57,210,192,0.4); animation:dot-pulse-cyan 1s infinite; }
 .pipeline-step.done .step-dot { background:var(--accent-green); }
 @keyframes dot-pulse { 0%,100%{box-shadow:0 0 4px var(--accent-gold-glow)} 50%{box-shadow:0 0 14px var(--accent-gold-glow)} }
+@keyframes dot-pulse-cyan { 0%,100%{box-shadow:0 0 4px rgba(57,210,192,0.3)} 50%{box-shadow:0 0 14px rgba(57,210,192,0.5)} }
 .step-icon { font-size:1.1rem; }
 .step-info { display:flex; flex-direction:column; }
 .step-label { font-size:0.68rem; font-weight:600; color:var(--text-secondary); white-space:nowrap; }
 .step-status { font-size:0.58rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.3px; }
+.pipeline-step.streaming .step-status { color:var(--accent-cyan); }
 .step-round { font-size:0.55rem; color:var(--accent-purple); font-weight:600; }
 .pipeline-connector { width:24px; height:2px; background:var(--border-glass); flex-shrink:0; }
 .pipeline-step.done ~ .pipeline-connector { background:var(--accent-green); }
@@ -134,6 +147,11 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 /* ── Dashboard Grid ──────────────────────────────────────── */
 .dash-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
 .dash-col { display:flex; flex-direction:column; gap:16px; }
+
+/* ── Streaming Cursor ────────────────────────────────────── */
+.streaming-cursor::after { content: '|'; color: var(--accent-gold); animation: cursor-blink 0.8s step-end infinite; font-weight: 100; }
+@keyframes cursor-blink { 0%,100%{opacity:1} 50%{opacity:0} }
+.streaming-cursor.hidden::after { display: none; }
 
 /* ── Debate Panel ────────────────────────────────────────── */
 .debate-panel, .intel-panel { padding:16px; }
@@ -146,14 +164,19 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .debate-content::-webkit-scrollbar-thumb { background:var(--border-glass); border-radius:4px; }
 .debate-placeholder { text-align:center; padding:20px; color:var(--text-muted); font-size:0.82rem; }
 .debate-round-tag { font-size:0.65rem; font-weight:700; color:var(--accent-purple); text-transform:uppercase; letter-spacing:0.5px; padding:6px 0 2px; margin-top:6px; border-top:1px solid var(--border-glass); }
-.debate-msg { padding:10px 12px; border-radius:var(--radius-sm); border-left:3px solid; font-size:0.82rem; }
+.debate-msg { padding:10px 12px; border-radius:var(--radius-sm); border-left:3px solid; font-size:0.82rem; transition: box-shadow 0.3s; }
+.debate-msg.streaming { box-shadow: 0 0 12px rgba(57,210,192,0.15); }
 .debate-msg.strategist { background:rgba(63,185,80,0.06); border-color:var(--accent-green); }
 .debate-msg.advocate { background:rgba(248,81,73,0.06); border-color:var(--accent-red); }
 .debate-msg.judge { background:rgba(245,158,11,0.06); border-color:var(--accent-gold); }
-.debate-msg .msg-agent { font-size:0.65rem; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:4px; }
+.debate-msg .msg-agent { font-size:0.65rem; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:4px; display:flex; align-items:center; gap:6px; }
 .debate-msg.strategist .msg-agent { color:var(--accent-green); }
 .debate-msg.advocate .msg-agent { color:var(--accent-red); }
 .debate-msg.judge .msg-agent { color:var(--accent-gold); }
+.msg-streaming-dot { width:5px; height:5px; border-radius:50%; background:currentColor; animation: typing-dot 1s ease-in-out infinite; display:inline-block; }
+.msg-streaming-dot:nth-child(2) { animation-delay:0.2s; }
+.msg-streaming-dot:nth-child(3) { animation-delay:0.4s; }
+@keyframes typing-dot { 0%,80%,100%{transform:scale(0.6);opacity:0.5} 40%{transform:scale(1);opacity:1} }
 .debate-msg .msg-text { color:var(--text-secondary); white-space:pre-wrap; line-height:1.6; font-size:0.8rem; }
 
 /* ── Intel Cards ─────────────────────────────────────────── */
@@ -161,6 +184,21 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .intel-card { padding:12px; border-radius:var(--radius-sm); background:var(--bg-glass); border:1px solid var(--border-glass); }
 .intel-card h4 { font-size:0.78rem; font-weight:600; margin-bottom:6px; }
 .intel-text { font-size:0.78rem; color:var(--text-secondary); white-space:pre-wrap; line-height:1.55; max-height:200px; overflow-y:auto; }
+
+/* ── Win Probability Arc ─────────────────────────────────── */
+.win-prob-panel { padding:16px; }
+.win-prob-panel h3 { font-family:var(--font-display); font-size:0.95rem; font-weight:700; margin-bottom:12px; }
+.win-prob-display { display:flex; align-items:center; gap:20px; }
+.win-prob-arc-wrap { flex-shrink:0; }
+.win-prob-svg { width:130px; height:90px; }
+#win-arc-before, #win-arc-after { transition: stroke-dashoffset 1.2s cubic-bezier(0.4, 0, 0.2, 1); }
+.win-prob-details { display:flex; flex-direction:column; gap:8px; flex:1; }
+.win-prob-row { display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:var(--bg-glass); border-radius:var(--radius-xs); border:1px solid var(--border-glass); }
+.wp-label { font-size:0.65rem; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.4px; }
+.wp-val { font-family:'Teko', sans-serif; font-size:1.2rem; font-weight:700; line-height:1; }
+.wp-before { color:var(--accent-gold); }
+.wp-after { color:var(--accent-green); }
+.wp-round { color:var(--accent-purple); font-family:var(--font); font-size:0.85rem; }
 
 /* ── Captain's Call ──────────────────────────────────────── */
 .captain-call-panel { padding:20px; background:linear-gradient(135deg, rgba(245,158,11,0.08), rgba(188,140,255,0.06)); border-color:var(--border-active); }
@@ -177,6 +215,9 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .confidence-bar-wrap { flex:1; height:10px; background:var(--bg-glass); border-radius:10px; overflow:hidden; border:1px solid var(--border-glass); }
 .confidence-bar { height:100%; border-radius:10px; background:var(--gradient-hero); transition:width 1s ease-out; width:0%; }
 .confidence-label { font-size:0.78rem; color:var(--text-secondary); min-width:100px; }
+
+/* ── Live Badge ──────────────────────────────────────────── */
+.live-badge { font-size:0.6rem; font-weight:800; color:var(--accent-red); letter-spacing:1px; margin-left:8px; animation:live-blink 1.5s ease-in-out infinite; }
 
 /* ── Commentary Tabs ─────────────────────────────────────── */
 .commentary-panel { padding:16px; }
@@ -205,6 +246,11 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 @keyframes slideUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
 .glass-panel { animation:slideUp 0.4s ease-out; }
 @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+@keyframes slideIn { from{opacity:0;transform:translateX(-10px)} to{opacity:1;transform:translateX(0)} }
+.debate-msg { animation: slideIn 0.3s ease-out; }
+
+/* ── Panel appear animation ──────────────────────────────── */
+.panel-appear { animation: slideUp 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
 
 /* ── Responsive ──────────────────────────────────────────── */
 @media(max-width:768px) {
@@ -216,6 +262,7 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
     .pipeline { flex-wrap:wrap; justify-content:center; }
     .dash-scorecard { font-size:0.72rem; }
     .extras-grid { grid-template-columns:1fr; }
+    .win-prob-display { flex-direction:column; }
 }
 @media(max-width:480px) {
     .form-row-2, .form-row-3 { grid-template-columns:1fr; }
